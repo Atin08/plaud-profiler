@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "plaud-profiler"
+version = "0.1.0"
+description = "Big Five personality profiles from Plaud.ai transcripts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "mcp>=1.0.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "pydantic>=2.6.0",
+    "python-dateutil>=2.9.0",
+]
+
+[project.scripts]
+plaud-profiler = "plaud_profiler.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plaud_profiler"]
+
+[tool.hatch.envs.default]
+type = "virtual"
+path = ".venv"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

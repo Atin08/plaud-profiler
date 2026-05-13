@@ -1,0 +1,233 @@
+openapi: "3.1.0"
+info:
+  title: Plaud Profiler
+  version: "0.1.0"
+  description: >
+    Big Five (OCEAN) personality profiles derived from Plaud.ai recordings and transcripts.
+    Profiles accumulate across sessions and provide scientifically-grounded collaboration tips.
+
+components:
+  schemas:
+
+    # ── Core speaker identity ────────────────────────────────────────────────
+    Speaker:
+      type: object
+      required: [id, display_name, recording_count, total_word_count]
+      properties:
+        id:
+          type: string
+          description: Stable identifier — Plaud speaker ID or manually assigned slug
+        display_name:
+          type: string
+        recording_count:
+          type: integer
+          minimum: 0
+        total_word_count:
+          type: integer
+          minimum: 0
+
+    # ── Plaud recording metadata ─────────────────────────────────────────────
+    Recording:
+      type: object
+      required: [id, name, created_at, duration_seconds]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: number
+          minimum: 0
+        speaker_ids:
+          type: array
+          items:
+            type: string
+
+    TranscriptSegment:
+      type: object
+      required: [speaker_id, text, start_seconds]
+      properties:
+        speaker_id:
+          type: string
+        text:
+          type: string
+        start_seconds:
+          type: number
+          minimum: 0
+        end_seconds:
+          type: number
+          minimum: 0
+
+    # ── Big Five scoring ─────────────────────────────────────────────────────
+    Trait:
+      type: string
+      enum:
+        - openness
+        - conscientiousness
+        - extraversion
+        - agreeableness
+        - neuroticism
+
+    TraitAnalysis:
+      type: object
+      required: [trait, score, confidence, evidence_quotes, linguistic_markers, interpretation]
+      properties:
+        trait:
+          $ref: '#/components/schemas/Trait'
+        score:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Percentile-style score; 50 is average
+        confidence:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: >
+            Confidence based on word-count evidence.
+            < 0.4 = low (sparse data), 0.4–0.7 = moderate, > 0.7 = high
+        evidence_quotes:
+          type: array
+          items:
+            type: string
+          description: Verbatim transcript quotes supporting this score
+          minItems: 1
+        linguistic_markers:
+          type: array
+          items:
+            type: string
+          description: Identified language patterns (e.g. "hedging", "goal-oriented verbs")
+        interpretation:
+          type: string
+          description: One-sentence plain-English interpretation of this score
+
+    BigFiveScores:
+      type: object
+      required: [openness, conscientiousness, extraversion, agreeableness, neuroticism]
+      properties:
+        openness:
+          type: number
+          minimum: 0
+          maximum: 100
+        conscientiousness:
+          type: number
+          minimum: 0
+          maximum: 100
+        extraversion:
+          type: number
+          minimum: 0
+          maximum: 100
+        agreeableness:
+          type: number
+          minimum: 0
+          maximum: 100
+        neuroticism:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    # ── Collaboration tips ───────────────────────────────────────────────────
+    CollaborationTip:
+      type: object
+      required: [trait, tip, rationale, approach_do, approach_avoid]
+      properties:
+        trait:
+          $ref: '#/components/schemas/Trait'
+        tip:
+          type: string
+          description: Concise actionable suggestion
+        rationale:
+          type: string
+          description: Scientific basis — cites Big Five research finding
+        approach_do:
+          type: array
+          items:
+            type: string
+          description: Specific behaviors to adopt with this person
+          minItems: 1
+        approach_avoid:
+          type: array
+          items:
+            type: string
+          description: Behaviors likely to create friction with this person
+          minItems: 1
+
+    # ── Full speaker profile ─────────────────────────────────────────────────
+    SpeakerProfile:
+      type: object
+      required:
+        - speaker
+        - scores
+        - trait_analyses
+        - collaboration_tips
+        - communication_style_summary
+        - last_updated
+        - analyzed_recording_ids
+      properties:
+        speaker:
+          $ref: '#/components/schemas/Speaker'
+        scores:
+          $ref: '#/components/schemas/BigFiveScores'
+        trait_analyses:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraitAnalysis'
+          minItems: 5
+          maxItems: 5
+        collaboration_tips:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollaborationTip'
+          minItems: 5
+          maxItems: 5
+        communication_style_summary:
+          type: string
+          description: 2–3 sentence narrative of how this person communicates
+        last_updated:
+          type: string
+          format: date-time
+        analyzed_recording_ids:
+          type: array
+          items:
+            type: string
+
+    # ── Analysis request/response (used internally) ──────────────────────────
+    AnalysisRequest:
+      type: object
+      required: [speaker_id, display_name, transcript_segments, recording_id]
+      properties:
+        speaker_id:
+          type: string
+        display_name:
+          type: string
+        transcript_segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/TranscriptSegment'
+        recording_id:
+          type: string
+        existing_profile:
+          $ref: '#/components/schemas/SpeakerProfile'
+          description: Existing profile to update (null for first analysis)
+
+    AnalysisResult:
+      type: object
+      required: [speaker_id, scores, trait_analyses, collaboration_tips, communication_style_summary]
+      properties:
+        speaker_id:
+          type: string
+        scores:
+          $ref: '#/components/schemas/BigFiveScores'
+        trait_analyses:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraitAnalysis'
+        collaboration_tips:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollaborationTip'
+        communication_style_summary:
+          type: string
