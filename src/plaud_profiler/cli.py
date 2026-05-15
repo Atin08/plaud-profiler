@@ -10,9 +10,9 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm
 
-from . import analyzer as analyze_module
 from . import profiles as profile_store
 from . import reporter
+from .analyzers import Engine, check_ollama, get_analyzer
 from .models import AnalysisRequest
 from .plaud_client import plaud_client
 
@@ -22,6 +22,26 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+# Engine option reused across commands
+_ENGINE_OPTION = typer.Option(
+    "nlp",
+    "--engine", "-e",
+    help="Analysis engine: [nlp] rule-based (no key), [ollama] local LLM (no key), [claude] Anthropic API",
+    show_default=True,
+)
+_MODEL_OPTION = typer.Option(
+    "llama3",
+    "--model", "-m",
+    help="Ollama model name (only used when --engine ollama)",
+    show_default=True,
+)
+_API_KEY_OPTION = typer.Option(
+    None,
+    "--api-key",
+    envvar="ANTHROPIC_API_KEY",
+    help="Anthropic API key (only needed for --engine claude)",
+)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -73,15 +93,20 @@ def list_recordings(
 @app.command()
 def analyze(
     recording_id: str = typer.Argument(help="Plaud recording ID to analyse"),
-    speaker: Optional[str] = typer.Option(
-        None, "--speaker", "-s",
-        help="Only analyse this speaker label (e.g. 'Speaker 1')",
-    ),
-    anthropic_api_key: Optional[str] = typer.Option(
-        None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key",
-    ),
+    speaker: Optional[str] = typer.Option(None, "--speaker", "-s", help="Only analyse this speaker label"),
+    engine: str = _ENGINE_OPTION,
+    model: str = _MODEL_OPTION,
+    api_key: Optional[str] = _API_KEY_OPTION,
 ):
-    """Analyse a recording and update speaker personality profiles."""
+    """Analyse a recording and update speaker personality profiles.
+
+    Choose your engine:\n
+      --engine nlp     Rule-based NLP (no API key, works offline)\n
+      --engine ollama  Local LLM via Ollama (no API key, needs Ollama running)\n
+      --engine claude  Claude API (best quality, needs ANTHROPIC_API_KEY)
+    """
+    _validate_engine(engine, api_key)
+
     async def _fetch():
         async with plaud_client() as client:
             segments = await client.get_transcript(recording_id)
@@ -105,7 +130,8 @@ def analyze(
             raise typer.Exit(1)
         by_speaker = {speaker: by_speaker[speaker]}
 
-    analyzer = analyze_module.Analyzer(api_key=anthropic_api_key)
+    analyzer = get_analyzer(engine, api_key=api_key, model=model)
+    _print_engine_banner(engine, model)
 
     for speaker_id, segs in by_speaker.items():
         word_count = sum(len(s.text.split()) for s in segs)
@@ -135,9 +161,9 @@ def analyze(
         )
 
         reporter.print_profile_summary(profile)
-        console.print(f"[green]Profile saved.[/green]")
+        console.print("[green]Profile saved.[/green]")
 
-    console.print(f"\n[dim]Run 'plaud-profiler profile <speaker-id>' for full details.[/dim]")
+    console.print(f"\n[dim]Run 'plaud-profiler profile <speaker-id>' for full details and tips.[/dim]")
 
 
 # ── Profiles ──────────────────────────────────────────────────────────────────
@@ -145,8 +171,7 @@ def analyze(
 @app.command(name="profiles")
 def list_profiles():
     """List all saved speaker profiles."""
-    all_profiles = profile_store.list_all()
-    reporter.print_profiles_list(all_profiles)
+    reporter.print_profiles_list(profile_store.list_all())
 
 
 @app.command()
@@ -182,14 +207,37 @@ def report(
 
 
 @app.command()
+def engines():
+    """Show available analysis engines and their status."""
+    console.print("\n[bold]Available engines:[/bold]\n")
+
+    console.print("[cyan]nlp[/cyan]    Rule-based NLP — always available, no setup needed")
+    console.print("         Grounded in Mairesse et al. (2007) LIWC linguistic markers\n")
+
+    try:
+        models = check_ollama()
+        model_list = ", ".join(models) if models else "(no models pulled yet — run: ollama pull llama3)"
+        console.print(f"[cyan]ollama[/cyan] Local LLM — [green]Ollama is running[/green]")
+        console.print(f"         Available models: {model_list}\n")
+    except RuntimeError as e:
+        console.print(f"[cyan]ollama[/cyan] Local LLM — [red]not available[/red]")
+        console.print(f"         {e}")
+        console.print("         Install: https://ollama.ai  then: ollama pull llama3\n")
+
+    import os
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    console.print(f"[cyan]claude[/cyan] Anthropic Claude API — {'[green]API key set[/green]' if has_key else '[yellow]needs ANTHROPIC_API_KEY[/yellow]'}")
+    console.print("         Best quality analysis. Get a key: https://console.anthropic.com\n")
+
+
+@app.command()
 def delete(
     speaker_id: str = typer.Argument(help="Speaker ID to delete"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ):
     """Delete a speaker's profile."""
     if not yes:
-        confirmed = Confirm.ask(f"Delete profile for '{speaker_id}'?")
-        if not confirmed:
+        if not Confirm.ask(f"Delete profile for '{speaker_id}'?"):
             raise typer.Abort()
 
     if profile_store.delete(speaker_id):
@@ -197,3 +245,32 @@ def delete(
     else:
         console.print(f"[red]No profile found for '{speaker_id}'.[/red]")
         raise typer.Exit(1)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _validate_engine(engine: str, api_key: Optional[str]) -> None:
+    if engine not in ("nlp", "ollama", "claude"):
+        console.print(f"[red]Unknown engine '{engine}'. Choose: nlp, ollama, claude[/red]")
+        raise typer.Exit(1)
+    if engine == "claude" and not api_key:
+        import os
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            console.print("[red]--engine claude requires ANTHROPIC_API_KEY to be set.[/red]")
+            console.print("[dim]Try --engine nlp (no key needed) or --engine ollama (local LLM).[/dim]")
+            raise typer.Exit(1)
+    if engine == "ollama":
+        try:
+            check_ollama()
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
+
+def _print_engine_banner(engine: str, model: str) -> None:
+    labels = {
+        "nlp": "[dim]Engine: rule-based NLP (Mairesse et al. LIWC markers)[/dim]",
+        "ollama": f"[dim]Engine: Ollama local LLM ({model})[/dim]",
+        "claude": "[dim]Engine: Claude API (claude-opus-4-7)[/dim]",
+    }
+    console.print(labels.get(engine, ""))
